@@ -11,3 +11,4 @@ wheels/
 
 # Env vars
 .env*
+!.env.example
