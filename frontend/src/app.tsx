@@ -1,138 +1,156 @@
-import { useState, useEffect } from "preact/hooks";
+import { useState, useRef } from "preact/hooks";
 import "./app.css";
 
 export function App() {
-  const [isConnected, setIsConnected] = useState(false);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [peerConnection, setPeerConnection] =
-    useState<RTCPeerConnection | null>(null);
-  const [ws, setWs] = useState<WebSocket | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
   const [clientId] = useState(() => Math.random().toString(36).substring(7));
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const chunkIndexRef = useRef(0);
+  const recordingStartedRef = useRef(false);
 
-  useEffect(() => {
-    // Initialize WebSocket connection
-    const websocket = new WebSocket(`ws://localhost:8000/ws/${clientId}`);
-
-    websocket.onopen = () => {
-      console.log("WebSocket connected");
-    };
-
-    websocket.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-
-      if (!peerConnection) return;
-
-      switch (data.type) {
-        case "answer":
-          await peerConnection.setRemoteDescription(
-            new RTCSessionDescription(data)
-          );
-          break;
-        case "ice-candidate":
-          await peerConnection.addIceCandidate(
-            new RTCIceCandidate(data.candidate)
-          );
-          break;
-      }
-    };
-
-    websocket.onerror = (error) => {
-      console.error("WebSocket error:", error);
-      setIsConnected(false);
-    };
-
-    websocket.onclose = () => {
-      console.log("WebSocket disconnected");
-      setIsConnected(false);
-    };
-
-    setWs(websocket);
-
-    return () => {
-      websocket.close();
-    };
-  }, [clientId]);
-
-  const startAudioStream = async () => {
+  const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      setLocalStream(stream);
-
-      // Create WebRTC connection
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      // First, start the recording on the backend
+      const startResponse = await fetch("http://localhost:8000/audio/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ client_id: clientId }),
       });
 
-      // Add audio track to connection
-      stream.getTracks().forEach((track) => {
-        pc.addTrack(track, stream);
+      if (!startResponse.ok) {
+        throw new Error(`Failed to start recording: ${startResponse.status}`);
+      }
+
+      const startData = await startResponse.json();
+      console.log("Recording started:", startData);
+
+      // Then start recording on the frontend
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 48000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
       });
 
-      // Handle incoming audio
-      pc.ontrack = (event) => {
-        const remoteAudio = new Audio();
-        remoteAudio.srcObject = event.streams[0];
-        remoteAudio.play();
-      };
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm;codecs=opus",
+      });
 
-      // Handle ICE candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate && ws?.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "ice-candidate",
-              candidate: event.candidate,
-            })
-          );
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+      chunkIndexRef.current = 0;
+      recordingStartedRef.current = true;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0 && recordingStartedRef.current) {
+          audioChunksRef.current.push(event.data);
+          uploadChunk(event.data);
         }
       };
 
-      setPeerConnection(pc);
-      setIsConnected(true);
-
-      // Create and send offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // Send offer through WebSocket
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "offer",
-            sdp: offer,
-          })
-        );
-      }
+      mediaRecorder.start(1000); // Send chunks every second
+      setIsRecording(true);
     } catch (error) {
-      console.error("Error accessing microphone:", error);
+      console.error("Error starting recording:", error);
       alert(
-        "Failed to access microphone. Please ensure you have granted microphone permissions."
+        "Failed to start recording. Please ensure you have granted microphone permissions."
       );
+      recordingStartedRef.current = false;
     }
   };
 
-  const stopAudioStream = () => {
-    if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
-      setLocalStream(null);
+  const uploadChunk = async (chunk: Blob) => {
+    if (!recordingStartedRef.current) {
+      console.error("Cannot upload chunk: recording not started");
+      return;
     }
-    if (peerConnection) {
-      peerConnection.close();
-      setPeerConnection(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", chunk, "audio_chunk.wav");
+      formData.append("client_id", clientId);
+      formData.append("chunk_index", chunkIndexRef.current.toString());
+      formData.append("total_chunks", "-1"); // We don't know total chunks yet
+
+      console.log("Uploading chunk:", {
+        clientId,
+        chunkIndex: chunkIndexRef.current,
+        chunkSize: chunk.size,
+      });
+
+      const response = await fetch("http://localhost:8000/audio/chunk", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          `HTTP error! status: ${response.status}, detail: ${errorData.detail}`
+        );
+      }
+
+      chunkIndexRef.current++;
+    } catch (error: unknown) {
+      console.error("Error uploading chunk:", error);
+      // If we get a 400 error, it might mean the recording wasn't properly started
+      if (error instanceof Error && error.message.includes("400")) {
+        recordingStartedRef.current = false;
+        alert("Recording error: Please try starting the recording again.");
+      }
     }
-    setIsConnected(false);
+  };
+
+  const stopRecording = async () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream
+        .getTracks()
+        .forEach((track) => track.stop());
+      setIsRecording(false);
+      recordingStartedRef.current = false;
+
+      try {
+        // Send stop signal to backend
+        const response = await fetch("http://localhost:8000/audio/stop", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ client_id: clientId }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(
+            `HTTP error! status: ${response.status}, detail: ${errorData.detail}`
+          );
+        }
+
+        // Reset chunk index for next recording
+        chunkIndexRef.current = 0;
+      } catch (error: unknown) {
+        console.error("Error stopping recording:", error);
+        alert("Error stopping recording. Please try again.");
+      }
+    }
   };
 
   return (
     <div class="container">
-      <h1>Audio Streaming App</h1>
+      <h1>Audio Recording App</h1>
       <button
-        onClick={isConnected ? stopAudioStream : startAudioStream}
-        class={`stream-button ${isConnected ? "active" : ""}`}
+        onClick={isRecording ? stopRecording : startRecording}
+        class={`stream-button ${isRecording ? "active" : ""}`}
       >
-        {isConnected ? "Stop Streaming" : "Start Streaming"}
+        {isRecording ? "Stop Recording" : "Start Recording"}
       </button>
-      <p class="status">Status: {isConnected ? "Connected" : "Disconnected"}</p>
+      <p class="status">Status: {isRecording ? "Recording" : "Stopped"}</p>
     </div>
   );
 }

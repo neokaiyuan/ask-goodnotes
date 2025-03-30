@@ -12,3 +12,6 @@ wheels/
 # Env vars
 .env*
 !.env.example
+
+# Recordings folder for temporary recordings
+recordings
