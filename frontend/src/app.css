@@ -1,0 +1,43 @@
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+h1 {
+  font-size: 2.5rem;
+  margin-bottom: 2rem;
+  color: #333;
+}
+
+.stream-button {
+  padding: 1rem 2rem;
+  font-size: 1.2rem;
+  border: none;
+  border-radius: 8px;
+  background-color: #4caf50;
+  color: white;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin: 1rem 0;
+}
+
+.stream-button:hover {
+  background-color: #45a049;
+  transform: translateY(-2px);
+}
+
+.stream-button.active {
+  background-color: #f44336;
+}
+
+.stream-button.active:hover {
+  background-color: #da190b;
+}
+
+.status {
+  font-size: 1.1rem;
+  color: #666;
+  margin-top: 1rem;
+}
