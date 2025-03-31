@@ -16,7 +16,7 @@ from pydub import AudioSegment
 from agents.voice import (
     AudioInput,
 )
-from backend.agents import pipeline
+from backend.agents import init_pipeline
 
 # Load environment variables
 load_dotenv()
@@ -41,6 +41,7 @@ class AudioManager:
         self.processing_tasks: Dict[str, asyncio.Task] = {}
 
     def start_recording(self, client_id: str) -> str:
+        self.pipeline = init_pipeline()
         if client_id in self.active_recordings:
             raise HTTPException(
                 status_code=400, detail="Recording already in progress for this client"
@@ -67,7 +68,7 @@ class AudioManager:
             )
 
         try:
-            temp_dir, temp_webm, _ = self.active_recordings[client_id]
+            _, temp_webm, _ = self.active_recordings[client_id]
 
             # Append the chunk to the WebM file
             with open(temp_webm, "ab") as f:
@@ -108,24 +109,57 @@ class AudioManager:
                 await self.disconnect_websocket(client_id)
 
     async def stop_processing(self, client_id: str):
-        if client_id in self.processing_tasks:
-            # Cancel the processing task
-            self.processing_tasks[client_id].cancel()
-            try:
-                await self.processing_tasks[client_id]
-            except asyncio.CancelledError:
-                pass
-            del self.processing_tasks[client_id]
+        try:
+            if client_id in self.processing_tasks:
+                # Cancel the processing task
+                self.processing_tasks[client_id].cancel()
+                try:
+                    await self.processing_tasks[client_id]
+                except asyncio.CancelledError:
+                    print(f"Processing task cancelled for client {client_id}")
+                except Exception as e:
+                    print(
+                        f"Error while cancelling task for client {client_id}: {str(e)}"
+                    )
+                finally:
+                    # Only delete if the key still exists
+                    if client_id in self.processing_tasks:
+                        del self.processing_tasks[client_id]
 
             # Clean up resources
             if client_id in self.active_recordings:
                 temp_dir, _, _ = self.active_recordings[client_id]
-                if os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir)
-                del self.active_recordings[client_id]
+                try:
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir)
+                except Exception as e:
+                    print(
+                        f"Error cleaning up temp directory for client {client_id}: {str(e)}"
+                    )
+                finally:
+                    # Only delete if the key still exists
+                    if client_id in self.active_recordings:
+                        del self.active_recordings[client_id]
 
             # Close websocket connection
-            await self.disconnect_websocket(client_id)
+            if client_id in self.active_websockets:
+                try:
+                    await self.active_websockets[client_id].close()
+                except Exception as e:
+                    print(f"Error closing websocket for client {client_id}: {str(e)}")
+                finally:
+                    # Only delete if the key still exists
+                    if client_id in self.active_websockets:
+                        del self.active_websockets[client_id]
+
+        except Exception as e:
+            print(f"Error in stop_processing for client {client_id}: {str(e)}")
+            import traceback
+
+            print(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=500, detail=f"Error stopping processing: {str(e)}"
+            )
 
     async def process_audio_with_agent(
         self, audio_path: str, client_id: str
@@ -185,12 +219,19 @@ class AudioManager:
 
             # Run the pipeline
             print("Starting pipeline processing")
-            result = await pipeline.run(audio_input)
+            result = await self.pipeline.run(audio_input)
 
             # Stream the results
             async for event in result.stream():
-                if event.type == "voice_stream_event_text":
-                    await self.send_text(client_id, event.data)
+                if event.type == "voice_stream_event_lifecycle":
+                    # Send input transcription to client
+                    await self.send_text(
+                        client_id, f"INPUT:{self.pipeline.workflow.input_transcription}"
+                    )
+                    print("Output text received; streaming output text")
+                    await self.send_text(
+                        client_id, f"OUTPUT:{result.total_output_text}"
+                    )
                 elif event.type == "voice_stream_event_audio":
                     try:
                         if not isinstance(event.data, np.ndarray):

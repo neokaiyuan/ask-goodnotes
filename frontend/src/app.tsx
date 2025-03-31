@@ -11,6 +11,7 @@ declare global {
 export function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [agentResponse, setAgentResponse] = useState<string>("");
+  const [userInput, setUserInput] = useState<string>("");
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -74,7 +75,11 @@ export function App() {
       } else {
         // Handle text data
         console.log("Received text data:", event.data);
-        setAgentResponse((prev) => prev + event.data);
+        if (event.data.startsWith("INPUT:")) {
+          setUserInput(event.data.substring(6)); // Remove "INPUT:" prefix
+        } else if (event.data.startsWith("OUTPUT:")) {
+          setAgentResponse(event.data.substring(7)); // Remove "OUTPUT:" prefix
+        }
       }
     };
 
@@ -171,6 +176,7 @@ export function App() {
 
       mediaRecorder.start(1000); // Send chunks every second
       setIsRecording(true);
+      setUserInput(""); // Clear previous user input
       setAgentResponse(""); // Clear previous response
     } catch (error) {
       console.error("Error starting recording:", error);
@@ -321,17 +327,27 @@ export function App() {
 
       if (!response.ok) {
         const errorData = await response.json();
+        console.error("Error stopping processing:", errorData);
+        // Even if the backend returns an error, we should still clean up the frontend state
+        setIsProcessing(false);
+        setIsPlayingAudio(false);
         throw new Error(
-          `HTTP error! status: ${response.status}, detail: ${errorData.detail}`
+          `Failed to stop processing: ${
+            errorData.detail || response.statusText
+          }`
         );
       }
     } catch (error: unknown) {
       console.error("Error stopping processing:", error);
+      // Ensure we clean up the frontend state even if there's an error
+      setIsProcessing(false);
+      setIsPlayingAudio(false);
     }
   };
 
   const stopAudio = async () => {
     shouldStopRef.current = true;
+    setIsPlayingAudio(false); // Set this first to prevent new audio from starting
 
     // Stop all active audio sources immediately
     activeSourcesRef.current.forEach((source) => {
@@ -353,13 +369,21 @@ export function App() {
     // Clear the queue and reset states
     audioQueueRef.current = [];
     isPlayingRef.current = false;
-    setIsPlayingAudio(false);
 
     // If we're in processing state, stop the backend processing
     if (isProcessing) {
-      await stopProcessing();
-      setIsProcessing(false);
+      try {
+        await stopProcessing();
+      } catch (error) {
+        console.error("Error during stopAudio:", error);
+        // Ensure we clean up the frontend state even if there's an error
+        setIsProcessing(false);
+        setIsPlayingAudio(false);
+      }
     }
+
+    // Add a small delay to ensure all audio has stopped
+    await new Promise((resolve) => setTimeout(resolve, 100));
   };
 
   return (
@@ -394,10 +418,18 @@ export function App() {
           ? "Processing..."
           : "Ready"}
       </p>
-      {agentResponse && (
-        <div class="agent-response">
-          <h2>Agent Response:</h2>
-          <pre>{agentResponse}</pre>
+      {(userInput || agentResponse) && (
+        <div class="conversation">
+          {userInput && (
+            <div class="message user-message">
+              <div class="message-content">{userInput}</div>
+            </div>
+          )}
+          {agentResponse && (
+            <div class="message agent-message">
+              <div class="message-content">{agentResponse}</div>
+            </div>
+          )}
         </div>
       )}
     </div>

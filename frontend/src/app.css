@@ -32,48 +32,81 @@ h1 {
 }
 
 .stream-button {
-  padding: 1rem 2.5rem;
-  font-size: 1.1rem;
+  padding: 1rem 2rem;
+  font-size: 1.2rem;
   border: none;
-  border-radius: 12px;
-  background-color: #00b4d8;
+  border-radius: 25px;
+  background-color: rgb(69, 191, 219);
   color: white;
   cursor: pointer;
   transition: all 0.3s ease;
   margin: 1rem 0;
-  font-weight: 600;
-  box-shadow: 0 4px 6px rgba(0, 180, 216, 0.1);
+}
+
+.stream-button:hover {
+  background-color: rgb(89, 211, 239);
+  transform: translateY(-2px);
+}
+
+.stream-button.active {
+  background-color: #dc3545;
 }
 
 .stream-button:disabled {
-  background-color: #cccccc;
+  background-color: #6c757d;
   cursor: not-allowed;
   transform: none;
-  box-shadow: none;
-  opacity: 0.7;
-}
-
-.stream-button:hover:not(:disabled) {
-  background-color: #0096c7;
-  transform: translateY(-2px);
-  box-shadow: 0 6px 8px rgba(0, 180, 216, 0.2);
-}
-
-.stream-button.active:not(:disabled) {
-  background-color: #ff6b6b;
-  box-shadow: 0 4px 6px rgba(255, 107, 107, 0.1);
-}
-
-.stream-button.active:hover:not(:disabled) {
-  background-color: #ff5252;
-  box-shadow: 0 6px 8px rgba(255, 107, 107, 0.2);
 }
 
 .status {
-  font-size: 1.1rem;
-  color: #666666;
-  margin-top: 1rem;
-  font-weight: 500;
+  color: #666;
+  margin-bottom: 1rem;
+}
+
+.conversation {
+  max-width: 600px;
+  margin: 2rem auto;
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.message {
+  margin: 1rem 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.user-message {
+  align-items: flex-end;
+}
+
+.agent-message {
+  align-items: flex-start;
+}
+
+.message-content {
+  max-width: 80%;
+  padding: 0.8rem 1rem;
+  border-radius: 15px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+.user-message .message-content {
+  background-color: rgb(187, 204, 224);
+  color: rgb(31, 35, 62);
+  border-bottom-right-radius: 5px;
+  margin-left: auto;
+}
+
+.agent-message .message-content {
+  background-color: white;
+  color: #333;
+  border-bottom-left-radius: 5px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .agent-response {
