@@ -140,17 +140,6 @@ class AudioManager:
                 print(f"Reading traceback: {traceback.format_exc()}")
                 raise
 
-            # Play the input audio before sending to agent
-            try:
-                print("\nPlaying input audio...")
-                sd.play(audio_array, samplerate=sample_rate, blocking=True)
-                print("Finished playing input audio")
-            except Exception as e:
-                print(f"Error playing input audio: {str(e)}")
-                import traceback
-
-                print(f"Playback traceback: {traceback.format_exc()}")
-
             # Create audio input for the pipeline with the original audio array
             print("Creating AudioInput object")
             audio_input = AudioInput(buffer=audio_array, frame_rate=sample_rate)
