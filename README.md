@@ -14,5 +14,6 @@ Demo for Goodnotes presentation
 
 1. Navigate to `backend` folder
 2. Install packages with `uv pip sync`
-3. Add `OPENAI_API_KEY` to `.env`
-4. Run server with `uv run main.py`
+3. Install `ffmpeg` on system to enable `pydub` to convert `webm` audio from client to `wav` for AI processing
+4. Add `OPENAI_API_KEY` to `.env`
+5. Run server with `uv run main.py`
