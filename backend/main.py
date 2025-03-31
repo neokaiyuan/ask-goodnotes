@@ -13,13 +13,10 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 from pydub import AudioSegment
-from agents import Agent
 from agents.voice import (
     AudioInput,
-    SingleAgentVoiceWorkflow,
-    VoicePipeline,
 )
-from agents.extensions.handoff_prompt import prompt_with_handoff_instructions
+from backend.agents import pipeline
 
 # Load environment variables
 load_dotenv()
@@ -35,20 +32,6 @@ class StartRecordingRequest(BaseModel):
 
 class StopRecordingRequest(BaseModel):
     client_id: str
-
-
-# Create the agent with voice capabilities
-agent = Agent(
-    name="Voice Assistant",
-    instructions=prompt_with_handoff_instructions(
-        "You are a helpful voice assistant. Process the audio input and provide relevant responses."
-    ),
-    model="gpt-4-turbo-preview",
-    tools=[],
-)
-
-# Create the voice pipeline
-pipeline = VoicePipeline(workflow=SingleAgentVoiceWorkflow(agent))
 
 
 class AudioManager:
