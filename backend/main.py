@@ -41,7 +41,6 @@ class AudioManager:
         self.processing_tasks: Dict[str, asyncio.Task] = {}
 
     def start_recording(self, client_id: str) -> str:
-        self.pipeline = init_pipeline()
         if client_id in self.active_recordings:
             raise HTTPException(
                 status_code=400, detail="Recording already in progress for this client"
@@ -219,14 +218,15 @@ class AudioManager:
 
             # Run the pipeline
             print("Starting pipeline processing")
-            result = await self.pipeline.run(audio_input)
+            pipeline = init_pipeline()
+            result = await pipeline.run(audio_input)
 
             # Stream the results
             async for event in result.stream():
                 if event.type == "voice_stream_event_lifecycle":
                     # Send input transcription to client
                     await self.send_text(
-                        client_id, f"INPUT:{self.pipeline.workflow.input_transcription}"
+                        client_id, f"INPUT:{pipeline.workflow.input_transcription}"
                     )
                     print("Output text received; streaming output text")
                     await self.send_text(
