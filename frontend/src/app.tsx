@@ -13,6 +13,7 @@ export function App() {
   const [agentResponse, setAgentResponse] = useState<string>("");
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [clientId] = useState(() => Math.random().toString(36).substring(7));
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunkIndexRef = useRef(0);
@@ -20,11 +21,13 @@ export function App() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const websocketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const MAX_RECONNECT_ATTEMPTS = 5;
   const RECONNECT_DELAY = 3000; // 3 seconds
+  const shouldStopRef = useRef(false);
 
   const connectWebSocket = () => {
     if (websocketRef.current?.readyState === WebSocket.OPEN) {
@@ -70,6 +73,7 @@ export function App() {
         playNextInQueue();
       } else {
         // Handle text data
+        console.log("Received text data:", event.data);
         setAgentResponse((prev) => prev + event.data);
       }
     };
@@ -259,12 +263,14 @@ export function App() {
     if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
 
     isPlayingRef.current = true;
+    setIsPlayingAudio(true);
+    shouldStopRef.current = false;
     const audioContext =
       audioContextRef.current ||
       new (window.AudioContext || window.webkitAudioContext)();
     audioContextRef.current = audioContext;
 
-    while (audioQueueRef.current.length > 0) {
+    while (audioQueueRef.current.length > 0 && !shouldStopRef.current) {
       const buffer = audioQueueRef.current.shift();
       if (!buffer) continue;
 
@@ -272,25 +278,111 @@ export function App() {
       source.buffer = buffer;
       source.connect(audioContext.destination);
       source.start(0);
+      activeSourcesRef.current.push(source);
+
+      // Check stop flag more frequently
+      if (shouldStopRef.current) {
+        source.stop(0);
+        source.disconnect();
+        activeSourcesRef.current = activeSourcesRef.current.filter(
+          (s) => s !== source
+        );
+        break;
+      }
 
       // Wait for the audio to finish playing
-      await new Promise((resolve) => {
-        source.onended = resolve;
+      await new Promise<void>((resolve) => {
+        source.onended = () => {
+          activeSourcesRef.current = activeSourcesRef.current.filter(
+            (s) => s !== source
+          );
+          resolve();
+        };
       });
     }
 
     isPlayingRef.current = false;
+    setIsPlayingAudio(false);
+  };
+
+  const stopProcessing = async () => {
+    try {
+      // Send stop signal to backend
+      const response = await fetch(
+        "http://localhost:8000/audio/stop-processing",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ client_id: clientId }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          `HTTP error! status: ${response.status}, detail: ${errorData.detail}`
+        );
+      }
+    } catch (error: unknown) {
+      console.error("Error stopping processing:", error);
+    }
+  };
+
+  const stopAudio = async () => {
+    shouldStopRef.current = true;
+
+    // Stop all active audio sources immediately
+    activeSourcesRef.current.forEach((source) => {
+      try {
+        source.stop(0);
+        source.disconnect();
+      } catch (e) {
+        console.error("Error stopping audio source:", e);
+      }
+    });
+    activeSourcesRef.current = [];
+
+    // Close and reset the context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    // Clear the queue and reset states
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
+    setIsPlayingAudio(false);
+
+    // If we're in processing state, stop the backend processing
+    if (isProcessing) {
+      await stopProcessing();
+      setIsProcessing(false);
+    }
   };
 
   return (
     <div class="container">
-      <h1>Audio Recording App</h1>
+      <h1>Ask Goodnotes</h1>
       <button
-        onClick={isRecording ? stopRecording : startRecording}
-        class={`stream-button ${isRecording ? "active" : ""}`}
-        disabled={!isConnected}
+        onClick={
+          isPlayingAudio
+            ? stopAudio
+            : isRecording
+            ? stopRecording
+            : startRecording
+        }
+        class={`stream-button ${isRecording || isPlayingAudio ? "active" : ""}`}
+        disabled={isProcessing && !isPlayingAudio}
       >
-        {isRecording ? "Stop Recording" : "Start Recording"}
+        {isProcessing && !isPlayingAudio
+          ? "Processing"
+          : isPlayingAudio
+          ? "Stop Audio"
+          : isRecording
+          ? "Stop Recording"
+          : "Start Recording"}
       </button>
       <p class="status">
         Status:{" "}

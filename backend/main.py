@@ -38,6 +38,7 @@ class AudioManager:
     def __init__(self):
         self.active_recordings: Dict[str, tuple[str, str, str]] = {}
         self.active_websockets: Dict[str, WebSocket] = {}
+        self.processing_tasks: Dict[str, asyncio.Task] = {}
 
     def start_recording(self, client_id: str) -> str:
         if client_id in self.active_recordings:
@@ -106,7 +107,45 @@ class AudioManager:
                 print(f"Error sending text: {str(e)}")
                 await self.disconnect_websocket(client_id)
 
+    async def stop_processing(self, client_id: str):
+        if client_id in self.processing_tasks:
+            # Cancel the processing task
+            self.processing_tasks[client_id].cancel()
+            try:
+                await self.processing_tasks[client_id]
+            except asyncio.CancelledError:
+                pass
+            del self.processing_tasks[client_id]
+
+            # Clean up resources
+            if client_id in self.active_recordings:
+                temp_dir, _, _ = self.active_recordings[client_id]
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                del self.active_recordings[client_id]
+
+            # Close websocket connection
+            await self.disconnect_websocket(client_id)
+
     async def process_audio_with_agent(
+        self, audio_path: str, client_id: str
+    ) -> AsyncGenerator[str, None]:
+        # Create a task for processing
+        task = asyncio.create_task(
+            self._process_audio_with_agent(audio_path, client_id)
+        )
+        self.processing_tasks[client_id] = task
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            print(f"Processing cancelled for client {client_id}")
+            raise
+        finally:
+            if client_id in self.processing_tasks:
+                del self.processing_tasks[client_id]
+
+    async def _process_audio_with_agent(
         self, audio_path: str, client_id: str
     ) -> AsyncGenerator[str, None]:
         try:
@@ -164,24 +203,17 @@ class AudioManager:
 
                         print(f"Traceback: {traceback.format_exc()}")
 
-            # Clean up after processing is complete
-            try:
-                if os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir)
-                print(f"Cleaned up temporary files for client {client_id}")
-                del self.active_recordings[client_id]
-                print(f"Removed recording entry for client {client_id}")
-                await self.disconnect_websocket(client_id)
-            except Exception as e:
-                print(f"Error during cleanup: {str(e)}")
-
+        except asyncio.CancelledError:
+            print(f"Processing cancelled for client {client_id}")
+            raise
         except Exception as e:
             print(f"Error processing audio with agent: {str(e)}")
             import traceback
 
             print(f"Full traceback: {traceback.format_exc()}")
             await self.send_text(client_id, f"Error processing audio: {str(e)}")
-            # Clean up even if there was an error
+        finally:
+            # Clean up resources
             try:
                 if client_id in self.active_recordings:
                     temp_dir, _, _ = self.active_recordings[client_id]
@@ -190,9 +222,7 @@ class AudioManager:
                     del self.active_recordings[client_id]
                 await self.disconnect_websocket(client_id)
             except Exception as cleanup_error:
-                print(
-                    f"Error during cleanup after processing error: {str(cleanup_error)}"
-                )
+                print(f"Error during cleanup: {str(cleanup_error)}")
 
     def stop_recording(self, client_id: str) -> str:
         if client_id not in self.active_recordings:
@@ -290,10 +320,25 @@ async def stop_recording(request: StopRecordingRequest):
     if not request.client_id:
         raise HTTPException(status_code=400, detail="client_id is required")
 
-    final_path = manager.stop_recording(request.client_id)
-    if not final_path:
-        return {"status": "error", "message": "No recording found to stop"}
+    try:
+        audio_path = manager.stop_recording(request.client_id)
+        if audio_path:
+            # Start processing the audio
+            asyncio.create_task(
+                manager.process_audio_with_agent(audio_path, request.client_id)
+            )
+        return {"status": "success", "message": "Recording stopped"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    # Start processing in the background
-    asyncio.create_task(manager.process_audio_with_agent(final_path, request.client_id))
-    return {"status": "success", "message": "Processing started"}
+
+@app.post("/audio/stop-processing")
+async def stop_processing(request: StopRecordingRequest):
+    if not request.client_id:
+        raise HTTPException(status_code=400, detail="client_id is required")
+
+    try:
+        await manager.stop_processing(request.client_id)
+        return {"status": "success", "message": "Processing stopped"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
